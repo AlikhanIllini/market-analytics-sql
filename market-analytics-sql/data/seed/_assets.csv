@@ -1,0 +1,9 @@
+symbol,name,asset_class
+AAPL,Apple Inc.,equity
+MSFT,Microsoft Corp.,equity
+NVDA,NVIDIA Corp.,equity
+SPY,SPDR S&P 500 ETF,etf
+QQQ,Invesco QQQ ETF,etf
+BTC,Bitcoin,crypto
+ETH,Ethereum,crypto
+TON,Toncoin,crypto
