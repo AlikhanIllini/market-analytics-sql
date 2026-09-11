@@ -5,3 +5,4 @@ psycopg2-binary>=2.9
 SQLAlchemy>=2.0
 streamlit>=1.30
 plotly>=5.18
+matplotlib>=3.8

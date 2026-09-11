@@ -35,13 +35,14 @@ and TON (crypto).
 
 Two ways to load:
 
-- **Real data** (`make load-real`): equities and ETFs come from Stooq, crypto
-  from CoinGecko. Both are free and need no API key.
-- **Offline sample** (`make load-seed`): a bundled synthetic dataset so the
-  project runs with no network. The sample series are generated with a shared
-  market factor, so equities correlate tightly (~0.85 to 0.93) and crypto
-  stays loosely coupled, matching how real markets behave. The numbers are
-  illustrative, not actual prices.
+- **Live data** (`make load-real`): equities and ETFs come from Yahoo Finance's
+  public chart endpoint (split-adjusted daily bars), crypto from Kraken's public
+  OHLC endpoint. Both are free and need no API key. If a source fails, the
+  loader falls back to the snapshot below and prints a warning naming the asset.
+- **Offline snapshot** (`make load-seed`): the same real prices saved to
+  `data/seed/`, covering September 2024 through September 2026, so the project
+  runs with no network. `make seed` refreshes the snapshot from live data and
+  refuses to overwrite it if any fetch fails.
 
 ## Quick start
 
@@ -52,8 +53,8 @@ docker compose up -d
 # 2. install deps
 pip install -r requirements.txt
 
-# 3. load the offline sample (or `make load-real` for live data)
-make load-seed
+# 3. load live data (or `make load-seed` to run offline from the snapshot)
+make load-real
 
 # 4. run the analytical queries
 psql postgresql://quant:quant@localhost:5432/market -f queries/01_performance_summary.sql
@@ -75,11 +76,11 @@ queries/
   04_recent_signals.sql        latest MA crossover per asset
   05_backtest_ma_crossover.sql crossover strategy vs buy-and-hold, after costs
 data/
-  load_data.py             builds schema, loads real or seed data
-  generate_seed.py         creates the offline sample CSVs
-  seed/                    bundled sample data
+  load_data.py             builds schema, loads live data or the snapshot
+  seed/                    real price snapshot for offline use
 dashboard/
   app.py                   streamlit + plotly front end
+  make_preview.py          renders preview.png from the SQL views
 ```
 
 ## Sample output
@@ -87,11 +88,16 @@ dashboard/
 `01_performance_summary.sql` ranks assets by a Sharpe-style ratio:
 
 ```
- symbol | asset_class | ann_return_pct | ann_vol_pct | sharpe_like | sharpe_rank
---------+-------------+----------------+-------------+-------------+-------------
- NVDA   | equity      |          36.08 |       27.84 |        1.30 |           2
- MSFT   | equity      |           7.44 |       17.89 |        0.42 |           3
- ...
+ symbol | asset_class | trading_days | ann_return_pct | ann_vol_pct | sharpe_like | sharpe_rank
+--------+-------------+--------------+----------------+-------------+-------------+-------------
+ QQQ    | etf         |          500 |          23.19 |       21.68 |        1.07 |           1
+ SPY    | etf         |          500 |          17.11 |       16.52 |        1.04 |           2
+ NVDA   | equity      |          500 |          41.29 |       44.25 |        0.93 |           3
+ AAPL   | equity      |          500 |          23.48 |       28.98 |        0.81 |           4
+ MSFT   | equity      |          500 |          11.76 |       28.87 |        0.41 |           5
+ BTC    | crypto      |          719 |          13.41 |       36.93 |        0.36 |           6
+ ETH    | crypto      |          719 |          14.16 |       58.01 |        0.24 |           7
+ TON    | crypto      |          699 |         -29.04 |       63.19 |       -0.46 |           8
 ```
 
-(Values shown are from the offline sample dataset.)
+(Values from the bundled snapshot of real prices, September 2024 to September 2026.)
