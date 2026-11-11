@@ -20,7 +20,10 @@ DB_URL = os.environ.get("DATABASE_URL", "postgresql://quant:quant@localhost:5432
 
 @st.cache_resource
 def get_engine():
-    return create_engine(DB_URL)
+    # Hosted Postgres (Neon) suspends idle compute, which drops open
+    # connections. pool_pre_ping checks each pooled connection before use
+    # and reconnects if it went stale.
+    return create_engine(DB_URL, pool_pre_ping=True)
 
 
 @st.cache_data(ttl=300)
@@ -90,7 +93,7 @@ if not bt.empty:
     net = float(last.equity_strategy_net) - 1
     gross = float(last.equity_strategy_gross) - 1
     st.caption(
-        f"Final return over the tested window — strategy {net:+.1%} after costs "
+        f"Final return over the tested window: strategy {net:+.1%} after costs "
         f"({gross:+.1%} before), buy & hold {bh:+.1%}. "
         f"Costs shaved {gross - net:.1%} off the strategy. Position is set from "
         "the prior day's signal, so there is no lookahead."
