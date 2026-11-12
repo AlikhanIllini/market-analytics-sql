@@ -15,7 +15,22 @@ import plotly.express as px
 import streamlit as st
 from sqlalchemy import create_engine, text
 
-DB_URL = os.environ.get("DATABASE_URL", "postgresql://quant:quant@localhost:5432/market")
+LOCAL_URL = "postgresql://quant:quant@localhost:5432/market"
+
+
+def database_url():
+    """Connection string for the app.
+
+    Order: DATABASE_URL in Streamlit secrets (the Secrets box on Streamlit
+    Community Cloud, or .streamlit/secrets.toml locally), then the
+    DATABASE_URL environment variable, then the local Docker database.
+    """
+    try:
+        if "DATABASE_URL" in st.secrets:
+            return st.secrets["DATABASE_URL"]
+    except FileNotFoundError:  # no secrets file at all
+        pass
+    return os.environ.get("DATABASE_URL", LOCAL_URL)
 
 
 @st.cache_resource
@@ -23,7 +38,7 @@ def get_engine():
     # Hosted Postgres (Neon) suspends idle compute, which drops open
     # connections. pool_pre_ping checks each pooled connection before use
     # and reconnects if it went stale.
-    return create_engine(DB_URL, pool_pre_ping=True)
+    return create_engine(database_url(), pool_pre_ping=True)
 
 
 @st.cache_data(ttl=300)

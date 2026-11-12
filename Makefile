@@ -1,6 +1,6 @@
-# Convenience targets. Assumes Docker is running.
-DATABASE_URL ?= postgresql://quant:quant@localhost:5432/market
-export DATABASE_URL
+# Convenience targets.
+# The scripts find the database themselves: DATABASE_URL env var, then
+# .streamlit/secrets.toml, then the local Docker database.
 
 db-up:        ## start postgres
 	docker compose up -d

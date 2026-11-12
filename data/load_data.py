@@ -11,13 +11,15 @@ Real sources, both free and key-less:
     equities / ETFs -> Yahoo Finance chart endpoint (split-adjusted daily bars)
     crypto -> Kraken public OHLC (last 720 daily bars, priced in USD)
 
-Connection comes from the DATABASE_URL env var, e.g.
+Connection comes from the DATABASE_URL env var, or from DATABASE_URL in
+.streamlit/secrets.toml, or falls back to the local Docker database at
     postgresql://quant:quant@localhost:5432/market
 """
 
 import argparse
 import os
 import time
+import tomllib
 from pathlib import Path
 
 import pandas as pd
@@ -28,7 +30,22 @@ from psycopg2.extras import execute_values
 HERE = Path(__file__).parent
 SCHEMA_DIR = HERE.parent / "schema"
 SEED_DIR = HERE / "seed"
-DB_URL = os.environ.get("DATABASE_URL", "postgresql://quant:quant@localhost:5432/market")
+LOCAL_URL = "postgresql://quant:quant@localhost:5432/market"
+SECRETS_FILE = Path(__file__).resolve().parent.parent / ".streamlit" / "secrets.toml"
+
+
+def database_url():
+    """DATABASE_URL env var first, then DATABASE_URL in .streamlit/secrets.toml
+    (the same file the dashboard reads), then the local Docker database."""
+    if os.environ.get("DATABASE_URL"):
+        return os.environ["DATABASE_URL"]
+    if SECRETS_FILE.exists():
+        with open(SECRETS_FILE, "rb") as f:
+            url = tomllib.load(f).get("DATABASE_URL")
+        if url:
+            return url
+    return LOCAL_URL
+
 
 # symbol -> (name, asset_class, source_id)
 # source_id is the Yahoo ticker or the Kraken pair.
@@ -142,7 +159,7 @@ def main():
                       help="pull real data and save it to data/seed/ as the offline snapshot")
     args = ap.parse_args()
 
-    conn = psycopg2.connect(DB_URL)
+    conn = psycopg2.connect(database_url())
     conn.autocommit = False
     cur = conn.cursor()
 

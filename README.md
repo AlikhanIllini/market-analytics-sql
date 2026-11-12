@@ -63,6 +63,25 @@ psql postgresql://quant:quant@localhost:5432/market -f queries/01_performance_su
 make dashboard
 ```
 
+## Hosted database (Neon) and deploy
+
+The app and the scripts look for the database in this order: `DATABASE_URL`
+in Streamlit secrets (app only), the `DATABASE_URL` environment variable,
+`DATABASE_URL` in `.streamlit/secrets.toml`, then the local Docker database.
+
+To run against a Neon database (Python 3.11 or newer):
+
+```bash
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# paste your Neon connection string into .streamlit/secrets.toml
+make load-real      # builds the schema and views in Neon and loads prices
+make dashboard
+```
+
+`.streamlit/secrets.toml` is git-ignored. To deploy on Streamlit Community
+Cloud, point the app at `dashboard/app.py` and paste the same
+`DATABASE_URL = "..."` line into the app's Secrets box.
+
 ## Layout
 
 ```

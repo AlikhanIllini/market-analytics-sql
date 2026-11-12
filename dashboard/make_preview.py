@@ -6,6 +6,7 @@ preview always matches whatever data is loaded. Run after loading data:
     python dashboard/make_preview.py
 """
 import os
+import tomllib
 from pathlib import Path
 
 import matplotlib
@@ -15,7 +16,23 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-DB_URL = os.environ.get("DATABASE_URL", "postgresql://quant:quant@localhost:5432/market")
+LOCAL_URL = "postgresql://quant:quant@localhost:5432/market"
+SECRETS_FILE = Path(__file__).resolve().parent.parent / ".streamlit" / "secrets.toml"
+
+
+def database_url():
+    """DATABASE_URL env var first, then DATABASE_URL in .streamlit/secrets.toml
+    (the same file the dashboard reads), then the local Docker database."""
+    if os.environ.get("DATABASE_URL"):
+        return os.environ["DATABASE_URL"]
+    if SECRETS_FILE.exists():
+        with open(SECRETS_FILE, "rb") as f:
+            url = tomllib.load(f).get("DATABASE_URL")
+        if url:
+            return url
+    return LOCAL_URL
+
+
 OUT = Path(__file__).parent / "preview.png"
 ORDER = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "BTC", "ETH", "TON"]
 
@@ -35,7 +52,7 @@ def style(ax, title):
 
 
 def main():
-    engine = create_engine(DB_URL)
+    engine = create_engine(database_url())
 
     ma = q(engine, """
         SELECT dt, close, sma_50, sma_200, cross_signal
