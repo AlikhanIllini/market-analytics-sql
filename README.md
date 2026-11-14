@@ -1,5 +1,11 @@
 # Market Analytics (SQL)
 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://market-analytics-sql.streamlit.app/)
+
+**Live dashboard: [market-analytics-sql.streamlit.app](https://market-analytics-sql.streamlit.app/)**
+(Streamlit Community Cloud on a Neon Postgres database. The app sleeps when
+idle, so the first load can take a few seconds.)
+
 A time-series analytics engine for equities, ETFs, and crypto, built on
 PostgreSQL. Real market data is loaded into a normalized schema, and every
 metric (returns, rolling volatility, moving-average crossovers, drawdowns,
@@ -9,7 +15,7 @@ CTEs. A small Streamlit dashboard sits on top to visualize the output.
 The point of the project is the SQL. The Python is just plumbing to get data
 in and pixels out.
 
-![dashboard preview](dashboard/preview.png)
+[![dashboard preview](dashboard/preview.png)](https://market-analytics-sql.streamlit.app/)
 
 ## What it shows
 

@@ -52,7 +52,10 @@ st.title("Market Analytics")
 st.caption("Equities, ETFs, and crypto. All metrics computed in SQL.")
 
 assets = q("SELECT symbol, asset_class FROM asset ORDER BY asset_class, symbol")
-symbol = st.sidebar.selectbox("Asset", assets["symbol"])
+# The selector lives in the page body, not the sidebar: the sidebar starts
+# collapsed on narrow windows, which hides the only control on the page.
+picker, _ = st.columns([1, 3])
+symbol = picker.selectbox("Asset", assets["symbol"])
 
 # ---- Price with moving averages -------------------------------------
 ma = q(
@@ -98,8 +101,9 @@ bfig.add_trace(go.Scatter(x=bt.dt, y=bt.equity_strategy_gross,
 bfig.add_hline(y=1, line_width=1, line_dash="dash", line_color="#888")
 bfig.update_layout(
     title=f"{symbol} backtest: growth of $1 (50/200 MA crossover vs buy & hold)",
-    height=420, margin=dict(t=40, b=10), yaxis_title="Equity (multiple of $1)",
-    legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+    height=440, margin=dict(t=40, b=10), yaxis_title="Equity (multiple of $1)",
+    # Legend sits under the plot so it cannot collide with the title.
+    legend=dict(orientation="h", yanchor="top", y=-0.12, x=0),
 )
 st.plotly_chart(bfig, use_container_width=True)
 if not bt.empty:
@@ -122,14 +126,19 @@ vol = q(
     s=symbol,
 )
 vfig = px.area(vol, x="dt", y="vol_20d_ann",
+               labels={"dt": "Date", "vol_20d_ann": "Annualized volatility"},
                title=f"{symbol} rolling 20-day annualized volatility")
-vfig.update_layout(height=320, margin=dict(t=40, b=10), yaxis_tickformat=".0%")
+vfig.update_layout(height=320, margin=dict(t=40, b=10), yaxis_tickformat=".0%",
+                   xaxis_title=None)
 col1.plotly_chart(vfig, use_container_width=True)
 
 # ---- Drawdown -------------------------------------------------------
 dd = q("SELECT dt, drawdown FROM v_drawdown WHERE symbol = :s ORDER BY dt", s=symbol)
-dfig = px.area(dd, x="dt", y="drawdown", title=f"{symbol} drawdown from peak")
-dfig.update_layout(height=320, margin=dict(t=40, b=10), yaxis_tickformat=".0%")
+dfig = px.area(dd, x="dt", y="drawdown",
+               labels={"dt": "Date", "drawdown": "Drawdown"},
+               title=f"{symbol} drawdown from peak")
+dfig.update_layout(height=320, margin=dict(t=40, b=10), yaxis_tickformat=".0%",
+                   xaxis_title=None)
 dfig.update_traces(line_color="#c0392b")
 col2.plotly_chart(dfig, use_container_width=True)
 
@@ -148,9 +157,18 @@ corr = q(
     """
 )
 matrix = corr.pivot(index="asset_a", columns="asset_b", values="correlation")
-hfig = px.imshow(matrix, text_auto=".2f", color_continuous_scale="RdBu_r",
-                 zmin=-1, zmax=1, aspect="auto")
-hfig.update_layout(height=420, margin=dict(t=10, b=10))
+# Fit the color scale to the data. When every pair is positively correlated
+# (the usual case for this universe) a 0 to 1 sequential scale uses the full
+# color range; a diverging -1 to 1 scale is only used if a negative appears.
+if float(matrix.min().min()) >= 0:
+    scale, zmin = "Reds", 0
+else:
+    scale, zmin = "RdBu_r", -1
+hfig = px.imshow(matrix, text_auto=".2f", color_continuous_scale=scale,
+                 zmin=zmin, zmax=1, aspect="auto",
+                 labels=dict(x="Asset", y="Asset", color="Correlation"))
+hfig.update_layout(height=420, margin=dict(t=10, b=10),
+                   xaxis_title=None, yaxis_title=None)
 st.plotly_chart(hfig, use_container_width=True)
 
 # ---- Performance table ----------------------------------------------
@@ -164,7 +182,9 @@ perf = q(
         FROM v_daily_return WHERE simple_return IS NOT NULL
         GROUP BY symbol, asset_class
     )
-    SELECT symbol, asset_class,
+    SELECT symbol AS "Symbol",
+           CASE asset_class WHEN 'etf' THEN 'ETF'
+                            ELSE INITCAP(asset_class) END AS "Asset class",
            ROUND((ann_return * 100)::NUMERIC, 1) AS "Ann return %",
            ROUND((ann_vol * 100)::NUMERIC, 1)    AS "Ann vol %",
            ROUND((ann_return / NULLIF(ann_vol, 0))::NUMERIC, 2) AS "Sharpe"
