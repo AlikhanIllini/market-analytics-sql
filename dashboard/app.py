@@ -126,8 +126,13 @@ if not bt.empty:
 col1, col2 = st.columns(2)
 
 # ---- Rolling volatility ---------------------------------------------
+# The first 20 days have no value yet (the window is still filling). Leave
+# them out: an area chart would draw the missing values as zero.
 vol = q(
-    "SELECT dt, vol_20d_ann FROM v_rolling_vol WHERE symbol = :s ORDER BY dt",
+    """
+    SELECT dt, vol_20d_ann FROM v_rolling_vol
+    WHERE symbol = :s AND vol_20d_ann IS NOT NULL ORDER BY dt
+    """,
     s=symbol,
 )
 vfig = px.area(vol, x="dt", y="vol_20d_ann",
