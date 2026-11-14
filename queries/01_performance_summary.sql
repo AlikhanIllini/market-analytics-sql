@@ -1,31 +1,24 @@
 -- ============================================================
 -- 01_performance_summary.sql
 -- Per-asset performance and risk summary over the full history.
--- Demonstrates: aggregate window math, Sharpe-style ratio,
--- and ranking with RANK() over a derived metric.
+-- Demonstrates: ranking with RANK() over a derived metric, on top
+-- of v_performance_summary (aggregates over an as-of join to the
+-- risk-free rate; see schema/02_views.sql).
+--
+-- Returns are total returns. Annualization uses 252 periods for
+-- stocks and ETFs and 365 for crypto. Sharpe is the annualized
+-- mean excess return over the 13-week T-bill, divided by the
+-- annualized standard deviation of excess returns.
 -- ============================================================
 
-WITH stats AS (
-    SELECT
-        symbol,
-        asset_class,
-        COUNT(*)                                   AS trading_days,
-        AVG(simple_return)                         AS avg_daily_return,
-        STDDEV_SAMP(simple_return)                 AS daily_vol,
-        AVG(simple_return) * 252                   AS ann_return,
-        STDDEV_SAMP(simple_return) * SQRT(252)     AS ann_vol
-    FROM v_daily_return
-    WHERE simple_return IS NOT NULL
-    GROUP BY symbol, asset_class
-)
 SELECT
     symbol,
     asset_class,
     trading_days,
-    ROUND((ann_return * 100)::NUMERIC, 2)          AS ann_return_pct,
-    ROUND((ann_vol    * 100)::NUMERIC, 2)          AS ann_vol_pct,
-    -- Risk-adjusted return, risk-free rate assumed zero for simplicity.
-    ROUND((ann_return / NULLIF(ann_vol, 0))::NUMERIC, 2) AS sharpe_like,
-    RANK() OVER (ORDER BY ann_return / NULLIF(ann_vol, 0) DESC) AS sharpe_rank
-FROM stats
+    ROUND((ann_return    * 100)::NUMERIC, 2)   AS ann_return_pct,
+    ROUND((ann_vol       * 100)::NUMERIC, 2)   AS ann_vol_pct,
+    ROUND((ann_risk_free * 100)::NUMERIC, 2)   AS risk_free_pct,
+    ROUND(sharpe::NUMERIC, 2)                  AS sharpe,
+    RANK() OVER (ORDER BY sharpe DESC)         AS sharpe_rank
+FROM v_performance_summary
 ORDER BY sharpe_rank;

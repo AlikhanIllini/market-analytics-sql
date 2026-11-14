@@ -6,10 +6,17 @@ Usage:
     python load_data.py              # pull real data from public APIs
     python load_data.py --seed       # load bundled offline CSVs (no network)
     python load_data.py --write-seed # pull real data and refresh the bundled CSVs
+    python load_data.py --strict     # pull real data; fail instead of falling back
 
-Real sources, both free and key-less:
-    equities / ETFs -> Yahoo Finance chart endpoint (split-adjusted daily bars)
-    crypto -> Kraken public OHLC (last 720 daily bars, priced in USD)
+Real sources, all free and key-less:
+    equities / ETFs -> Yahoo Finance chart endpoint (daily bars, with a
+                       dividend-adjusted close for total returns)
+    crypto          -> Kraken public OHLC (last 720 daily bars, priced in USD)
+    risk-free rate  -> Yahoo Finance ^IRX (13-week Treasury bill yield)
+
+Only completed daily bars are stored. A bar for a session that is still
+trading is dropped, so a load in the middle of the day cannot store an
+intraday price as that day's close.
 
 Connection comes from the DATABASE_URL env var, or from DATABASE_URL in
 .streamlit/secrets.toml, or falls back to the local Docker database at
@@ -60,16 +67,30 @@ UNIVERSE = {
     "TON":  ("Toncoin", "crypto", "TONUSD"),
 }
 
-COLUMNS = ["dt", "open", "high", "low", "close", "volume"]
+COLUMNS = ["dt", "open", "high", "low", "close", "adj_close", "volume"]
+RISK_FREE_ID = "^IRX"                 # 13-week T-bill yield, quoted in percent
+RISK_FREE_SEED = SEED_DIR / "_risk_free.csv"
 
 
 def run_sql_file(cur, path):
     cur.execute(Path(path).read_text())
 
 
-def fetch_yahoo(source_id, period="2y"):
-    """Daily OHLCV from Yahoo's public chart endpoint. Prices are
-    split-adjusted, so returns stay clean across stock splits."""
+def with_retries(fetch, *args, attempts=3, **kwargs):
+    """Call a fetcher, retrying with a short backoff. Public endpoints
+    occasionally rate-limit or time out; one retry usually clears it."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return fetch(*args, **kwargs)
+        except Exception:
+            if attempt == attempts:
+                raise
+            time.sleep(2 * attempt)
+
+
+def yahoo_chart(source_id, period):
+    """One result block from Yahoo's public chart endpoint, with any bar
+    for a session that is still trading removed from its timestamps."""
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{source_id}"
     r = requests.get(
         url,
@@ -79,6 +100,20 @@ def fetch_yahoo(source_id, period="2y"):
     )
     r.raise_for_status()
     res = r.json()["chart"]["result"][0]
+
+    # Yahoo includes today's bar while the market is open, with the latest
+    # trade standing in for the close. Count it only once the session ends.
+    keep = len(res["timestamp"])
+    session = res.get("meta", {}).get("currentTradingPeriod", {}).get("regular", {})
+    if session and session["start"] <= res["timestamp"][-1] and time.time() < session["end"]:
+        keep -= 1
+    return res, keep
+
+
+def fetch_yahoo(source_id, period="2y"):
+    """Daily OHLCV from Yahoo. close is split-adjusted; adj_close is also
+    adjusted for dividends, which is what total returns are built from."""
+    res, keep = yahoo_chart(source_id, period)
     quote = res["indicators"]["quote"][0]
 
     return pd.DataFrame({
@@ -87,8 +122,21 @@ def fetch_yahoo(source_id, period="2y"):
         "high": quote["high"],
         "low": quote["low"],
         "close": quote["close"],
+        "adj_close": res["indicators"]["adjclose"][0]["adjclose"],
         "volume": quote["volume"],
-    })
+    }).iloc[:keep]
+
+
+def fetch_risk_free(period="5y"):
+    """13-week T-bill yield as an annual decimal (0.04 = 4%). Pulled over a
+    longer range than prices so every return date has a rate on or before it."""
+    res, keep = yahoo_chart(RISK_FREE_ID, period)
+    df = pd.DataFrame({
+        "dt": pd.to_datetime(res["timestamp"], unit="s").strftime("%Y-%m-%d"),
+        "annual_yield": res["indicators"]["quote"][0]["close"],
+    }).iloc[:keep].dropna()
+    df["annual_yield"] = (df["annual_yield"] / 100).round(6)
+    return df
 
 
 def fetch_kraken(source_id):
@@ -104,6 +152,9 @@ def fetch_kraken(source_id):
     bars = next(v for k, v in js["result"].items() if k != "last")
     df = pd.DataFrame(bars, columns=["ts", "open", "high", "low", "close", "vwap", "volume", "count"])
     df["dt"] = pd.to_datetime(df["ts"], unit="s").dt.strftime("%Y-%m-%d")
+
+    # Crypto pays no dividends, so the adjusted close is the close.
+    df["adj_close"] = df["close"]
 
     # The final bar is today's candle, which is still forming.
     return df[COLUMNS].iloc[:-1].astype({c: float for c in COLUMNS[1:]})
@@ -130,7 +181,7 @@ def upsert_asset(cur, symbol, name, asset_class):
 
 def upsert_prices(cur, asset_id, df):
     rows = [
-        (asset_id, r.dt, r.open, r.high, r.low, r.close, r.volume)
+        (asset_id, r.dt, r.open, r.high, r.low, r.close, r.adj_close, r.volume)
 
         for r in df.itertuples(index=False)
     ]
@@ -139,10 +190,11 @@ def upsert_prices(cur, asset_id, df):
         cur,
 
         """
-        INSERT INTO price_daily (asset_id, dt, open, high, low, close, volume)
+        INSERT INTO price_daily (asset_id, dt, open, high, low, close, adj_close, volume)
         VALUES %s
         ON CONFLICT (asset_id, dt) DO UPDATE
-            SET close = EXCLUDED.close, volume = EXCLUDED.volume
+            SET close = EXCLUDED.close, adj_close = EXCLUDED.adj_close,
+                volume = EXCLUDED.volume
         """,
 
         rows,
@@ -157,6 +209,9 @@ def main():
     mode.add_argument("--seed", action="store_true", help="load bundled offline CSVs")
     mode.add_argument("--write-seed", action="store_true",
                       help="pull real data and save it to data/seed/ as the offline snapshot")
+    mode.add_argument("--strict", action="store_true",
+                      help="pull real data and abort, changing nothing, if any source fails "
+                           "(for scheduled refreshes, where a silent fallback would be wrong)")
     args = ap.parse_args()
 
     conn = psycopg2.connect(database_url())
@@ -175,24 +230,28 @@ def main():
                 df = load_seed(symbol)
 
             elif cls == "crypto":
-                df = fetch_kraken(source_id)
+                df = with_retries(fetch_kraken, source_id)
                 time.sleep(1)  # stay under Kraken's public rate limit
 
             else:
-                df = fetch_yahoo(source_id)
+                df = with_retries(fetch_yahoo, source_id)
 
         except Exception as e:
-            # Never write a stale or partial snapshot over the seed files.
+            # Never write a stale or partial snapshot over the seed files,
+            # and never let a strict run replace live data with the seed.
+            # Nothing has been committed, so the database is left as it was.
             if args.write_seed:
                 raise SystemExit(f"{symbol}: fetch failed ({e}); seed files left unchanged")
+            if args.strict:
+                raise SystemExit(f"{symbol}: fetch failed ({e}); database left unchanged")
 
             print(f"  {symbol}: fetch failed ({e}); falling back to seed")
 
             df = load_seed(symbol)
             fell_back.append(symbol)
 
-        df = df.dropna(subset=["close"]).round(
-            {"open": 6, "high": 6, "low": 6, "close": 6, "volume": 2}
+        df = df.dropna(subset=["close", "adj_close"]).round(
+            {"open": 6, "high": 6, "low": 6, "close": 6, "adj_close": 6, "volume": 2}
         )
         asset_id = upsert_asset(cur, symbol, name, cls)
         count = upsert_prices(cur, asset_id, df)
@@ -201,6 +260,26 @@ def main():
             df[COLUMNS].to_csv(SEED_DIR / f"{symbol}.csv", index=False)
 
         print(f"  {symbol:5s} {count} rows  {df.dt.iloc[0]} to {df.dt.iloc[-1]}")
+
+    # Risk-free rate, with the same fallback rules as prices.
+    try:
+        rf = pd.read_csv(RISK_FREE_SEED) if args.seed else with_retries(fetch_risk_free)
+    except Exception as e:
+        if args.write_seed:
+            raise SystemExit(f"risk-free rate: fetch failed ({e}); seed files left unchanged")
+        if args.strict:
+            raise SystemExit(f"risk-free rate: fetch failed ({e}); database left unchanged")
+        print(f"  risk-free rate: fetch failed ({e}); falling back to seed")
+        rf = pd.read_csv(RISK_FREE_SEED)
+        fell_back.append("risk-free rate")
+    execute_values(
+        cur,
+        "INSERT INTO risk_free_daily (dt, annual_yield) VALUES %s",
+        list(rf[["dt", "annual_yield"]].itertuples(index=False, name=None)),
+    )
+    if args.write_seed:
+        rf.to_csv(RISK_FREE_SEED, index=False)
+    print(f"  T-bill {len(rf)} rows  {rf.dt.iloc[0]} to {rf.dt.iloc[-1]}")
 
     print("Building analytical views...")
 

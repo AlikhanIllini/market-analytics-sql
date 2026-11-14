@@ -14,6 +14,9 @@ load-seed:    ## load the offline sample dataset
 load-real:    ## pull real data from public APIs
 	python data/load_data.py
 
+refresh:      ## pull real data, changing nothing if any source fails
+	python data/load_data.py --strict
+
 dashboard:    ## launch the streamlit dashboard
 	streamlit run dashboard/app.py
 

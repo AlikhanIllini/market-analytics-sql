@@ -49,7 +49,11 @@ def q(sql, **params):
 
 st.set_page_config(page_title="Market Analytics", layout="wide")
 st.title("Market Analytics")
-st.caption("Equities, ETFs, and crypto. All metrics computed in SQL.")
+asof = q("SELECT MAX(dt) AS d FROM price_daily").d[0]
+st.caption(
+    "Equities, ETFs, and crypto. All metrics computed in SQL. "
+    f"Data through {asof:%B} {asof.day}, {asof.year}."
+)
 
 assets = q("SELECT symbol, asset_class FROM asset ORDER BY asset_class, symbol")
 # The selector lives in the page body, not the sidebar: the sidebar starts
@@ -114,7 +118,8 @@ if not bt.empty:
     st.caption(
         f"Final return over the tested window: strategy {net:+.1%} after costs "
         f"({gross:+.1%} before), buy & hold {bh:+.1%}. "
-        f"Costs shaved {gross - net:.1%} off the strategy. Position is set from "
+        f"Costs shaved {gross - net:.1%} off the strategy. Tested window: "
+        f"{bt['dt'].iloc[0]:%b %d, %Y} to {last['dt']:%b %d, %Y}. Position is set from "
         "the prior day's signal, so there is no lookahead."
     )
 
@@ -173,22 +178,59 @@ st.plotly_chart(hfig, use_container_width=True)
 
 # ---- Performance table ----------------------------------------------
 st.subheader("Performance summary")
-perf = q(
-    """
-    WITH stats AS (
-        SELECT symbol, asset_class,
-               AVG(simple_return) * 252 AS ann_return,
-               STDDEV_SAMP(simple_return) * SQRT(252) AS ann_vol
-        FROM v_daily_return WHERE simple_return IS NOT NULL
-        GROUP BY symbol, asset_class
-    )
-    SELECT symbol AS "Symbol",
-           CASE asset_class WHEN 'etf' THEN 'ETF'
-                            ELSE INITCAP(asset_class) END AS "Asset class",
-           ROUND((ann_return * 100)::NUMERIC, 1) AS "Ann return %",
-           ROUND((ann_vol * 100)::NUMERIC, 1)    AS "Ann vol %",
-           ROUND((ann_return / NULLIF(ann_vol, 0))::NUMERIC, 2) AS "Sharpe"
-    FROM stats ORDER BY "Sharpe" DESC
-    """
+# v_performance_summary was added after the first deployment. A database
+# built from the older schema keeps the dashboard up, with the simpler
+# return-over-volatility ratio, until its next data load rebuilds the views.
+has_summary = bool(
+    q("SELECT to_regclass('v_performance_summary') IS NOT NULL AS ok").ok[0]
 )
-st.dataframe(perf, use_container_width=True, hide_index=True)
+if has_summary:
+    perf = q(
+        """
+        SELECT symbol AS "Symbol",
+               CASE asset_class WHEN 'etf' THEN 'ETF'
+                                ELSE INITCAP(asset_class) END AS "Asset class",
+               ROUND((ann_return * 100)::NUMERIC, 1)::FLOAT8 AS "Ann return %",
+               ROUND((ann_vol * 100)::NUMERIC, 1)::FLOAT8    AS "Ann vol %",
+               ROUND(sharpe::NUMERIC, 2)::FLOAT8             AS "Sharpe"
+        FROM v_performance_summary ORDER BY sharpe DESC
+        """
+    )
+    perf_note = (
+        "Total returns, dividends included. Annualized over 252 trading days "
+        "for stocks and ETFs and 365 days for crypto. Sharpe is the excess "
+        "return over the 13-week Treasury bill divided by its volatility."
+    )
+else:
+    perf = q(
+        """
+        WITH stats AS (
+            SELECT symbol, asset_class,
+                   CASE WHEN asset_class = 'crypto' THEN 365 ELSE 252 END AS ppy,
+                   AVG(simple_return) AS mean_r, STDDEV_SAMP(simple_return) AS sd_r
+            FROM v_daily_return WHERE simple_return IS NOT NULL
+            GROUP BY symbol, asset_class
+        )
+        SELECT symbol AS "Symbol",
+               CASE asset_class WHEN 'etf' THEN 'ETF'
+                                ELSE INITCAP(asset_class) END AS "Asset class",
+               ROUND((mean_r * ppy * 100)::NUMERIC, 1)::FLOAT8       AS "Ann return %",
+               ROUND((sd_r * SQRT(ppy) * 100)::NUMERIC, 1)::FLOAT8   AS "Ann vol %",
+               ROUND((mean_r / NULLIF(sd_r, 0) * SQRT(ppy))::NUMERIC, 2)::FLOAT8
+                                                                      AS "Return / vol"
+        FROM stats ORDER BY "Return / vol" DESC
+        """
+    )
+    perf_note = (
+        "Annualized over 252 trading days for stocks and ETFs and 365 days "
+        "for crypto. Return / vol is not adjusted for the risk-free rate."
+    )
+st.dataframe(
+    perf, use_container_width=True, hide_index=True,
+    column_config={
+        "Ann return %": st.column_config.NumberColumn(format="%.1f"),
+        "Ann vol %": st.column_config.NumberColumn(format="%.1f"),
+        perf.columns[-1]: st.column_config.NumberColumn(format="%.2f"),
+    },
+)
+st.caption(perf_note)

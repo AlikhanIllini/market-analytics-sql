@@ -1,0 +1,51 @@
+# Reloads prices and rebuilds the SQL views in the hosted database, so the
+# live dashboard does not go stale.
+#
+# Needs one repository secret, DATABASE_URL (the Neon connection string).
+# Settings -> Secrets and variables -> Actions -> New repository secret.
+#
+# The load is all-or-nothing: --strict aborts without committing if any data
+# source fails, so a bad run leaves the previous data in place.
+name: Refresh market data
+
+on:
+  schedule:
+    # 00:30 UTC daily. US markets have closed and the previous UTC day's
+    # crypto bar is complete, so every stored bar is a finished one.
+    - cron: "30 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - name: Check for the database secret
+        id: secret
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::DATABASE_URL secret is not set, so nothing was refreshed."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.secret.outputs.present == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.secret.outputs.present == 'true'
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.secret.outputs.present == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Load prices and rebuild views
+        if: steps.secret.outputs.present == 'true'
+        run: python data/load_data.py --strict
